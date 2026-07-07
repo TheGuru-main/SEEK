@@ -1,1 +1,8 @@
-server.js
+ gridsearch/
+ server.js
+ gsp.js
+knowledge.js
+package.json
+ public/
+index.html
+manifest.json
