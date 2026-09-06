@@ -10,7 +10,7 @@
     <div class="container">
         <header>
             <h1>🛡️ BubbleJumbo Full GSP Shield</h1>
-            <p class="subtitle">7 Master Keys • 7×7 Grid • K Escalation</p>
+            <p class="subtitle">7 Master Keys • 7×7 Grid • K Escalation • Attack Detection</p>
         </header>
 
         <section class="status-panel">
@@ -62,6 +62,20 @@
             <button id="simulateAttack" class="btn-danger">Simulate External Attack</button>
         </section>
 
+        <section class="attack-types">
+            <h2>Simulate Specific Attack Type</h2>
+            <div class="attack-buttons">
+                <button class="btn-secondary" data-attack="phishing">Phishing</button>
+                <button class="btn-secondary" data-attack="bruteforce">Brute Force</button>
+                <button class="btn-secondary" data-attack="ransomware">Ransomware</button>
+                <button class="btn-secondary" data-attack="malware">Malware</button>
+                <button class="btn-secondary" data-attack="network">Network Anomaly</button>
+                <button class="btn-secondary" data-attack="sql_injection">SQL Injection</button>
+                <button class="btn-secondary" data-attack="xss">XSS</button>
+                <button class="btn-secondary" data-attack="zero_day">Zero-Day (Anomaly)</button>
+            </div>
+        </section>
+
         <section class="response-panel">
             <h2>Response</h2>
             <pre id="responseBox">// waiting...</pre>
@@ -70,16 +84,14 @@
 
     <script>
         (function() {
-            // Session ID
             const sessionId = 'sess-' + Math.random().toString(36).substring(2, 15);
             document.getElementById('sessionId').textContent = sessionId;
 
-            // Utility to set response box
             function setResponse(text) {
                 document.getElementById('responseBox').textContent = text;
             }
 
-            // Attach event listeners immediately (before any fetch)
+            // Attach event listeners
             document.getElementById('newSessionBtn').addEventListener('click', () => {
                 location.reload();
             });
@@ -102,7 +114,7 @@
                     await refreshGrid();
                     await refreshStatus();
                 } catch (err) {
-                    setResponse('Error submitting password: ' + err.message);
+                    setResponse('Error: ' + err.message);
                 }
             });
 
@@ -111,18 +123,37 @@
                     const res = await fetch('/api/detect', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ session_id: sessionId, reason: 'manual simulation' })
+                        body: JSON.stringify({ session_id: sessionId, reason: 'generic simulation', attack_type: 'generic' })
                     });
                     const data = await res.json();
                     setResponse(JSON.stringify(data, null, 2));
                     await refreshGrid();
                     await refreshStatus();
                 } catch (err) {
-                    setResponse('Error simulating attack: ' + err.message);
+                    setResponse('Error: ' + err.message);
                 }
             });
 
-            // Define refresh functions
+            // Specific attack buttons
+            document.querySelectorAll('.attack-buttons button').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const attackType = btn.dataset.attack;
+                    try {
+                        const res = await fetch('/api/detect', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ session_id: sessionId, reason: `Simulated ${attackType}`, attack_type: attackType })
+                        });
+                        const data = await res.json();
+                        setResponse(JSON.stringify(data, null, 2));
+                        await refreshGrid();
+                        await refreshStatus();
+                    } catch (err) {
+                        setResponse('Error: ' + err.message);
+                    }
+                });
+            });
+
             async function refreshGrid() {
                 try {
                     const res = await fetch(`/api/challenges?session_id=${sessionId}`);
