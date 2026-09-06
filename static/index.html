@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BubbleJumbo Full GSP Tester</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🛡️ BubbleJumbo Full GSP Shield</h1>
+            <p class="subtitle">7 Master Keys • 7×7 Grid • K Escalation</p>
+        </header>
+
+        <section class="status-panel">
+            <div class="status-item">
+                <span class="label">Session ID</span>
+                <span id="sessionId" class="mono"></span>
+            </div>
+            <div class="status-item">
+                <span class="label">Current K</span>
+                <span id="currentK" class="mono">17</span>
+            </div>
+            <div class="status-item">
+                <span class="label">Attack Count</span>
+                <span id="attackCount" class="mono">0</span>
+            </div>
+            <div class="status-item">
+                <span class="label">Phase Progress</span>
+                <span id="phaseProgress" class="mono">0/7</span>
+            </div>
+            <button id="newSessionBtn" class="btn-secondary">New Session</button>
+        </section>
+
+        <section class="master-keys">
+            <h2>Master Keys (for testing)</h2>
+            <div class="key-grid">
+                <div class="key-item"><strong>A</strong> <code>A#2$550198110199&26012001#</code></div>
+                <div class="key-item"><strong>E</strong> <code>E#2$560198110199&27012001#</code></div>
+                <div class="key-item"><strong>K</strong> <code>K#3$550198110189&26012002#</code></div>
+                <div class="key-item"><strong>D</strong> <code>D#2$550198111199&26012001#</code></div>
+                <div class="key-item"><strong>J</strong> <code>J#2$550298111129&26912001#</code></div>
+                <div class="key-item"><strong>C</strong> <code>C#2$950128111199&26012001#</code></div>
+                <div class="key-item"><strong>B</strong> <code>B#2$550108111199&26012201#</code></div>
+            </div>
+        </section>
+
+        <section class="grid-section">
+            <h2>Live Shard Grid (7×7)</h2>
+            <div id="gridContainer" class="grid-container"></div>
+        </section>
+
+        <section class="attack-panel">
+            <h2>Attacker Console</h2>
+            <p class="hint">Enter the password for the current phase. After all 7, K escalates.</p>
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" placeholder="Phase password..." autocomplete="off">
+            </div>
+            <button id="submitPassword" class="btn-primary">Submit Password</button>
+            <button id="simulateAttack" class="btn-danger">Simulate External Attack</button>
+        </section>
+
+        <section class="response-panel">
+            <h2>Response</h2>
+            <pre id="responseBox">// waiting...</pre>
+        </section>
+    </div>
+
+    <script>
+        const sessionId = 'sess-' + Math.random().toString(36).substring(2, 15);
+        document.getElementById('sessionId').textContent = sessionId;
+
+        let currentK = 17;
+        let attackCount = 0;
+        let phaseProgress = 0;
+
+        // Fetch and render grid
+        async function refreshGrid() {
+            try {
+                const res = await fetch(`/api/challenges?session_id=${sessionId}`);
+                const data = await res.json();
+                currentK = data.K;
+                document.getElementById('currentK').textContent = currentK;
+                renderGrid(data.challenges);
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        function renderGrid(challenges) {
+            const container = document.getElementById('gridContainer');
+            container.innerHTML = '';
+            // Build a 7x7 map
+            const grid = Array(7).fill(null).map(() => Array(7).fill([]));
+            challenges.forEach(ch => {
+                const col = ch.col;
+                const row = ch.row - 1; // 1-indexed to 0-indexed
+                if (col >= 0 && col < 7 && row >= 0 && row < 7) {
+                    grid[row][col] = [...grid[row][col], ch];
+                }
+            });
+
+            for (let r = 0; r < 7; r++) {
+                for (let c = 0; c < 7; c++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'cell';
+                    const shards = grid[r][c];
+                    if (shards.length > 0) {
+                        // Add label and shard values
+                        const labels = [...new Set(shards.map(s => s.label))];
+                        cell.classList.add(`phase-${labels[0]}`);
+                        if (labels.length > 1) cell.classList.add('overlap');
+                        const text = shards.map(s => `${s.label}:${s.shard_value}`).join('|');
+                        cell.textContent = text.substring(0, 15) + (text.length > 15 ? '…' : '');
+                        cell.title = shards.map(s => `(${s.col},${s.row}) k=${s.shard_index} ${s.shard_value}`).join('\n');
+                    } else {
+                        cell.textContent = `${c},${r+1}`;
+                        cell.style.opacity = '0.3';
+                    }
+                    container.appendChild(cell);
+                }
+            }
+        }
+
+        // Update status
+        async function refreshStatus() {
+            const res = await fetch(`/api/status?session_id=${sessionId}`);
+            const data = await res.json();
+            document.getElementById('attackCount').textContent = data.attack_count;
+            document.getElementById('phaseProgress').textContent = `${data.attacker_progress}/7`;
+            document.getElementById('currentK').textContent = data.K;
+        }
+
+        // Submit password
+        document.getElementById('submitPassword').addEventListener('click', async () => {
+            const password = document.getElementById('password').value;
+            const res = await fetch('/api/attempt', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({session_id: sessionId, password: password})
+            });
+            const data = await res.json();
+            document.getElementById('responseBox').textContent = JSON.stringify(data, null, 2);
+            document.getElementById('password').value = '';
+            refreshGrid();
+            refreshStatus();
+        });
+
+        // Simulate attack
+        document.getElementById('simulateAttack').addEventListener('click', async () => {
+            const res = await fetch('/api/detect', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({session_id: sessionId, reason: 'manual simulation'})
+            });
+            const data = await res.json();
+            document.getElementById('responseBox').textContent = JSON.stringify(data, null, 2);
+            refreshGrid();
+            refreshStatus();
+        });
+
+        // New session
+        document.getElementById('newSessionBtn').addEventListener('click', () => {
+            location.reload();
+        });
+
+        // Initial load
+        refreshGrid();
+        refreshStatus();
+    </script>
+</body>
+</html>
