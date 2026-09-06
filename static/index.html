@@ -69,98 +69,120 @@
     </div>
 
     <script>
-        const sessionId = 'sess-' + Math.random().toString(36).substring(2, 15);
-        document.getElementById('sessionId').textContent = sessionId;
+        (function() {
+            // Session ID
+            const sessionId = 'sess-' + Math.random().toString(36).substring(2, 15);
+            document.getElementById('sessionId').textContent = sessionId;
 
-        let currentK = 17;
-        let attackCount = 0;
-        let phaseProgress = 0;
-
-        async function refreshGrid() {
-            try {
-                const res = await fetch(`/api/challenges?session_id=${sessionId}`);
-                const data = await res.json();
-                currentK = data.K;
-                document.getElementById('currentK').textContent = currentK;
-                renderGrid(data.challenges);
-            } catch (err) {
-                console.error(err);
+            // Utility to set response box
+            function setResponse(text) {
+                document.getElementById('responseBox').textContent = text;
             }
-        }
 
-        function renderGrid(challenges) {
-            const container = document.getElementById('gridContainer');
-            container.innerHTML = '';
-            const grid = Array(7).fill(null).map(() => Array(7).fill([]));
-            challenges.forEach(ch => {
-                const col = ch.col;
-                const row = ch.row - 1;
-                if (col >= 0 && col < 7 && row >= 0 && row < 7) {
-                    grid[row][col] = [...grid[row][col], ch];
+            // Attach event listeners immediately (before any fetch)
+            document.getElementById('newSessionBtn').addEventListener('click', () => {
+                location.reload();
+            });
+
+            document.getElementById('submitPassword').addEventListener('click', async () => {
+                const password = document.getElementById('password').value;
+                if (!password) {
+                    setResponse('Error: Password is empty.');
+                    return;
+                }
+                try {
+                    const res = await fetch('/api/attempt', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ session_id: sessionId, password: password })
+                    });
+                    const data = await res.json();
+                    setResponse(JSON.stringify(data, null, 2));
+                    document.getElementById('password').value = '';
+                    await refreshGrid();
+                    await refreshStatus();
+                } catch (err) {
+                    setResponse('Error submitting password: ' + err.message);
                 }
             });
 
-            for (let r = 0; r < 7; r++) {
-                for (let c = 0; c < 7; c++) {
-                    const cell = document.createElement('div');
-                    cell.className = 'cell';
-                    const shards = grid[r][c];
-                    if (shards.length > 0) {
-                        const labels = [...new Set(shards.map(s => s.label))];
-                        cell.classList.add(`phase-${labels[0]}`);
-                        if (labels.length > 1) cell.classList.add('overlap');
-                        const text = shards.map(s => `${s.label}:${s.shard_value}`).join('|');
-                        cell.textContent = text.substring(0, 15) + (text.length > 15 ? '…' : '');
-                        cell.title = shards.map(s => `(${s.col},${s.row}) k=${s.shard_index} ${s.shard_value}`).join('\n');
-                    } else {
-                        cell.textContent = `${c},${r+1}`;
-                        cell.style.opacity = '0.3';
+            document.getElementById('simulateAttack').addEventListener('click', async () => {
+                try {
+                    const res = await fetch('/api/detect', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ session_id: sessionId, reason: 'manual simulation' })
+                    });
+                    const data = await res.json();
+                    setResponse(JSON.stringify(data, null, 2));
+                    await refreshGrid();
+                    await refreshStatus();
+                } catch (err) {
+                    setResponse('Error simulating attack: ' + err.message);
+                }
+            });
+
+            // Define refresh functions
+            async function refreshGrid() {
+                try {
+                    const res = await fetch(`/api/challenges?session_id=${sessionId}`);
+                    const data = await res.json();
+                    document.getElementById('currentK').textContent = data.K;
+                    renderGrid(data.challenges);
+                } catch (err) {
+                    setResponse('Error fetching grid: ' + err.message);
+                }
+            }
+
+            async function refreshStatus() {
+                try {
+                    const res = await fetch(`/api/status?session_id=${sessionId}`);
+                    const data = await res.json();
+                    document.getElementById('attackCount').textContent = data.attack_count;
+                    document.getElementById('phaseProgress').textContent = `${data.attacker_progress}/7`;
+                    document.getElementById('currentK').textContent = data.K;
+                } catch (err) {
+                    setResponse('Error fetching status: ' + err.message);
+                }
+            }
+
+            function renderGrid(challenges) {
+                const container = document.getElementById('gridContainer');
+                container.innerHTML = '';
+                const grid = Array(7).fill(null).map(() => Array(7).fill([]));
+                challenges.forEach(ch => {
+                    const col = ch.col;
+                    const row = ch.row - 1;
+                    if (col >= 0 && col < 7 && row >= 0 && row < 7) {
+                        grid[row][col] = [...grid[row][col], ch];
                     }
-                    container.appendChild(cell);
+                });
+
+                for (let r = 0; r < 7; r++) {
+                    for (let c = 0; c < 7; c++) {
+                        const cell = document.createElement('div');
+                        cell.className = 'cell';
+                        const shards = grid[r][c];
+                        if (shards.length > 0) {
+                            const labels = [...new Set(shards.map(s => s.label))];
+                            cell.classList.add(`phase-${labels[0]}`);
+                            if (labels.length > 1) cell.classList.add('overlap');
+                            const text = shards.map(s => `${s.label}:${s.shard_value}`).join('|');
+                            cell.textContent = text.substring(0, 15) + (text.length > 15 ? '…' : '');
+                            cell.title = shards.map(s => `(${s.col},${s.row}) k=${s.shard_index} ${s.shard_value}`).join('\n');
+                        } else {
+                            cell.textContent = `${c},${r+1}`;
+                            cell.style.opacity = '0.3';
+                        }
+                        container.appendChild(cell);
+                    }
                 }
             }
-        }
 
-        async function refreshStatus() {
-            const res = await fetch(`/api/status?session_id=${sessionId}`);
-            const data = await res.json();
-            document.getElementById('attackCount').textContent = data.attack_count;
-            document.getElementById('phaseProgress').textContent = `${data.attacker_progress}/7`;
-            document.getElementById('currentK').textContent = data.K;
-        }
-
-        document.getElementById('submitPassword').addEventListener('click', async () => {
-            const password = document.getElementById('password').value;
-            const res = await fetch('/api/attempt', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({session_id: sessionId, password: password})
-            });
-            const data = await res.json();
-            document.getElementById('responseBox').textContent = JSON.stringify(data, null, 2);
-            document.getElementById('password').value = '';
+            // Initial load
             refreshGrid();
             refreshStatus();
-        });
-
-        document.getElementById('simulateAttack').addEventListener('click', async () => {
-            const res = await fetch('/api/detect', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({session_id: sessionId, reason: 'manual simulation'})
-            });
-            const data = await res.json();
-            document.getElementById('responseBox').textContent = JSON.stringify(data, null, 2);
-            refreshGrid();
-            refreshStatus();
-        });
-
-        document.getElementById('newSessionBtn').addEventListener('click', () => {
-            location.reload();
-        });
-
-        refreshGrid();
-        refreshStatus();
+        })();
     </script>
 </body>
 </html>
