@@ -2,115 +2,188 @@ import os
 import time
 import math
 import hashlib
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from typing import List, Dict
 
 app = FastAPI()
 
-# --- BUBBLEJUMBO ENGINE CORE ---
+# ═══════════════════════════════════════════════════════
+#  FULL BUBBLEJUMBO CONFIGURATION
+# ═══════════════════════════════════════════════════════
+GRID_COLS = 7
+GRID_ROWS = 7                # 7x7 grid for the challenge face
+ROW_STEP = 3                 # D
+K_INIT = 17
+K_STEP = 17
+
+FIXED_UID = "550198550199"
+S_FIXED = sum(int(c) for c in FIXED_UID)   # 57
+
+# The seven master keys, each mapped to its own column
+MASTER_KEYS = [
+    {"label": "A", "password": "A#2$550198110199&26012001#", "column": 0},
+    {"label": "E", "password": "E#2$560198110199&27012001#", "column": 1},
+    {"label": "K", "password": "K#3$550198110189&26012002#", "column": 2},
+    {"label": "D", "password": "D#2$550198111199&26012001#", "column": 3},
+    {"label": "J", "password": "J#2$550298111129&26912001#", "column": 4},
+    {"label": "C", "password": "C#2$950128111199&26012001#", "column": 5},
+    {"label": "B", "password": "B#2$550108111199&26012201#", "column": 6},
+]
+
+def gsp_start_row(password: str) -> int:
+    """Compute start_row using GSP formula: ((L + S - 1) % 7) + 1"""
+    L = len(password)
+    S = S_FIXED
+    return ((L + S - 1) % GRID_ROWS) + 1
+
+def gsp_shard_cell(label: str, start_row: int, k: int):
+    """Return (col, row) for shard k of a given key."""
+    col_map = {m["label"]: m["column"] for m in MASTER_KEYS}
+    c = col_map[label]
+    col = (c + k) % GRID_COLS
+    row = ((start_row - 1 + k * ROW_STEP) % GRID_ROWS) + 1
+    return col, row
+
+def gsp_shard_value(password: str, k: int) -> str:
+    """Deterministic 3‑char shard value from password and shard index."""
+    L = len(password)
+    i1 = k % L
+    i2 = (k * 7 + 13) % L
+    i3 = (k * 11 + 29) % L
+    return password[i1] + password[i2] + password[i3]
+
+# ═══════════════════════════════════════════════════════
+#  BUBBLEJUMBO ENGINE (per‑session state)
+# ═══════════════════════════════════════════════════════
 class BubbleJumboEngine:
-    def __init__(self, uid_sum=57, initial_k=17):
-        self.uid_sum = uid_sum
-        self.k = initial_k
-        self.columns = ['A', 'E', 'K', 'D', 'J', 'C', 'B']
-        self.grid_rows = 17
-        self.tarpit_base_delay = 0.2
-        self.instance_password_hash = hashlib.sha256(b"CorrectUserPassword123!").hexdigest()
-        self.valid_shards = self._generate_shards()
-        
-        # State tracking per-session/client to simulate independent downloads
-        self.sessions = {}
+    def __init__(self):
+        self.sessions: Dict[str, dict] = {}
 
-    def _generate_shards(self):
-        shards = {}
-        for r in range(self.grid_rows):
-            for col in self.columns:
-                coord = f"{col}{r+1}"
-                seed = f"bubblejumbo-{self.uid_sum}-{coord}"
-                shards[coord] = hashlib.sha256(seed.encode()).hexdigest()[:8]
-        return shards
-
-    def get_session_state(self, session_id):
+    def get_session_state(self, session_id: str) -> dict:
         if session_id not in self.sessions:
-            self.sessions[session_id] = {"attack_attempts": 0, "current_k": self.k}
+            self.sessions[session_id] = {
+                "K": K_INIT,
+                "attack_count": 0,
+                "attacker_progress": 0,   # which phase is expected next (0‑6)
+                "locked": False,
+                "last_attack_time": None
+            }
         return self.sessions[session_id]
 
-# Initialize global engine instance
+    def get_challenges(self, session_id: str) -> List[dict]:
+        """Return the full grid challenges for the current K of a session."""
+        state = self.get_session_state(session_id)
+        K = state["K"]
+        challenges = []
+        for mk in MASTER_KEYS:
+            start_row = gsp_start_row(mk["password"])
+            for k in range(K):
+                col, row = gsp_shard_cell(mk["label"], start_row, k)
+                challenges.append({
+                    "label": mk["label"],
+                    "cell": f"{mk['label']}{row}",   # e.g., "A12"
+                    "col": col,
+                    "row": row,
+                    "shard_index": k,
+                    "shard_value": gsp_shard_value(mk["password"], k)
+                })
+        return challenges
+
+    def detect_attack(self, session_id: str) -> int:
+        """Escalate K by K_STEP and mark session as under attack."""
+        state = self.get_session_state(session_id)
+        state["K"] += K_STEP
+        state["attack_count"] += 1
+        state["locked"] = True
+        state["last_attack_time"] = time.time()
+        return state["K"]
+
+    def attempt_password(self, session_id: str, incoming: str) -> dict:
+        """
+        Process a password attempt from the attacker.
+        Returns the new state.
+        """
+        state = self.get_session_state(session_id)
+        phase_idx = state["attacker_progress"] % len(MASTER_KEYS)
+        expected_key = MASTER_KEYS[phase_idx]
+
+        if incoming == expected_key["password"]:
+            state["attacker_progress"] += 1
+            # If all 7 phases completed, still escalate and reset progress
+            if state["attacker_progress"] % len(MASTER_KEYS) == 0:
+                state["attacker_progress"] = 0
+                self.detect_attack(session_id)
+                return {
+                    "success": False,
+                    "message": "All 7 phases correct, but access NOT granted. Escalating.",
+                    "K": state["K"],
+                    "progress": state["attacker_progress"],
+                    "attack_count": state["attack_count"]
+                }
+            return {
+                "success": True,
+                "message": f"Phase {expected_key['label']} correct. Continue.",
+                "K": state["K"],
+                "progress": state["attacker_progress"],
+                "attack_count": state["attack_count"]
+            }
+        else:
+            # Wrong password -> escalate and reset progress
+            self.detect_attack(session_id)
+            state["attacker_progress"] = 0
+            return {
+                "success": False,
+                "message": f"Wrong password for Phase {expected_key['label']}. Attack detected.",
+                "K": state["K"],
+                "progress": state["attacker_progress"],
+                "attack_count": state["attack_count"]
+            }
+
 bj_engine = BubbleJumboEngine()
 
-# --- API DATA MODELS ---
-class AttackPayload(BaseModel):
+# ═══════════════════════════════════════════════════════
+#  Pydantic Models
+# ═══════════════════════════════════════════════════════
+class AttemptRequest(BaseModel):
     session_id: str
     password: str
-    submitted_shards: list
-    telemetry: dict
 
-# --- ROUTING ---
+class AttackDetectRequest(BaseModel):
+    session_id: str
+    reason: str = ""
 
-@app.post("/api/validate")
-async def validate_request(payload: AttackPayload, request: Request):
-    state = bj_engine.get_session_state(payload.session_id)
-    start_time = time.time()
+# ═══════════════════════════════════════════════════════
+#  API Endpoints
+# ═══════════════════════════════════════════════════════
+@app.post("/api/attempt")
+async def attempt_password(request: AttemptRequest):
+    result = bj_engine.attempt_password(request.session_id, request.password)
+    return JSONResponse(content=result)
 
-    # 1. Enforce Infinite Tarpit Delay if previously flagged
-    if state["attack_attempts"] > 0:
-        delay = bj_engine.tarpit_base_delay * math.pow(2.0, state["attack_attempts"]) * (state["current_k"] / 10.0)
-        delay = min(delay, 15.0)  # Capped at 15s so Render connection doesn't drop prematurely
-        time.sleep(delay)
-
-    # 2. Check Password
-    input_pw_hash = hashlib.sha256(payload.password.encode()).hexdigest()
-    pw_matches = (input_pw_hash == bj_engine.instance_password_hash)
-
-    # 3. Behavioral Integrity Assessment (Detecting Automation / Attacks)
-    is_attack = False
-    reason = "None"
-
-    # Analyze client-side telemetry signals
-    if payload.telemetry.get("isAutomated", False) or payload.telemetry.get("webdriverActive", False):
-        is_attack = True
-        reason = "Automation Framework / Bot Environment Detected"
-    
-    # Analyze shard trajectory
-    for coord in payload.submitted_shards:
-        if coord not in bj_engine.valid_shards:
-            is_attack = True
-            reason = f"Grid Anomaly: Probed unallocated Honey-Shard ({coord})"
-            break
-        if sum(ord(char) for char in coord) % state["current_k"] == 0:
-            is_attack = True
-            reason = f"Cryptographic Trap: Triggered boundary threshold at {coord}"
-            break
-
-    # 4. Mitigation / Escalation Router
-    if is_attack:
-        state["attack_attempts"] += 1
-        state["current_k"] += 5  # Harden matrix constraints
-        
-        return JSONResponse(status_code=403, content={
-            "success": False,
-            "message": f"Denied by Backbone: {reason}",
-            "current_k": state["current_k"],
-            "attempts": state["attack_attempts"]
-        })
-
-    if pw_matches:
-        state["attack_attempts"] = max(0, state["attack_attempts"] - 1)
-        return {
-            "success": True,
-            "message": f"Authorized in {time.time() - start_time:.4f}s. Token issued.",
-            "current_k": state["current_k"],
-            "attempts": state["attack_attempts"]
-        }
-
-    return JSONResponse(status_code=401, content={
-        "success": False, 
-        "message": "Denied: Invalid credentials.",
-        "current_k": state["current_k"],
-        "attempts": state["attack_attempts"]
+@app.post("/api/detect")
+async def detect_attack(request: AttackDetectRequest):
+    new_k = bj_engine.detect_attack(request.session_id)
+    return JSONResponse(content={
+        "success": False,
+        "message": f"Attack detected: {request.reason}",
+        "K": new_k
     })
 
-# Serve Frontend static assets
+@app.get("/api/challenges")
+async def get_challenges(session_id: str):
+    challenges = bj_engine.get_challenges(session_id)
+    return JSONResponse(content={
+        "challenges": challenges,
+        "K": bj_engine.get_session_state(session_id)["K"]
+    })
+
+@app.get("/api/status")
+async def get_status(session_id: str):
+    state = bj_engine.get_session_state(session_id)
+    return JSONResponse(content=state)
+
+# Serve static files
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
