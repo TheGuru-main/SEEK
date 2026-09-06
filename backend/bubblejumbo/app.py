@@ -14,8 +14,8 @@ app = FastAPI()
 #  FULL BUBBLEJUMBO CONFIGURATION
 # ═══════════════════════════════════════════════════════
 GRID_COLS = 7
-GRID_ROWS = 7                # 7x7 grid for the challenge face
-ROW_STEP = 3                 # D
+GRID_ROWS = 7
+ROW_STEP = 3
 K_INIT = 17
 K_STEP = 17
 
@@ -34,13 +34,11 @@ MASTER_KEYS = [
 ]
 
 def gsp_start_row(password: str) -> int:
-    """Compute start_row using GSP formula: ((L + S - 1) % 7) + 1"""
     L = len(password)
     S = S_FIXED
     return ((L + S - 1) % GRID_ROWS) + 1
 
 def gsp_shard_cell(label: str, start_row: int, k: int):
-    """Return (col, row) for shard k of a given key."""
     col_map = {m["label"]: m["column"] for m in MASTER_KEYS}
     c = col_map[label]
     col = (c + k) % GRID_COLS
@@ -48,7 +46,6 @@ def gsp_shard_cell(label: str, start_row: int, k: int):
     return col, row
 
 def gsp_shard_value(password: str, k: int) -> str:
-    """Deterministic 3‑char shard value from password and shard index."""
     L = len(password)
     i1 = k % L
     i2 = (k * 7 + 13) % L
@@ -67,14 +64,13 @@ class BubbleJumboEngine:
             self.sessions[session_id] = {
                 "K": K_INIT,
                 "attack_count": 0,
-                "attacker_progress": 0,   # which phase is expected next (0‑6)
+                "attacker_progress": 0,
                 "locked": False,
                 "last_attack_time": None
             }
         return self.sessions[session_id]
 
     def get_challenges(self, session_id: str) -> List[dict]:
-        """Return the full grid challenges for the current K of a session."""
         state = self.get_session_state(session_id)
         K = state["K"]
         challenges = []
@@ -84,7 +80,7 @@ class BubbleJumboEngine:
                 col, row = gsp_shard_cell(mk["label"], start_row, k)
                 challenges.append({
                     "label": mk["label"],
-                    "cell": f"{mk['label']}{row}",   # e.g., "A12"
+                    "cell": f"{mk['label']}{row}",
                     "col": col,
                     "row": row,
                     "shard_index": k,
@@ -93,7 +89,6 @@ class BubbleJumboEngine:
         return challenges
 
     def detect_attack(self, session_id: str) -> int:
-        """Escalate K by K_STEP and mark session as under attack."""
         state = self.get_session_state(session_id)
         state["K"] += K_STEP
         state["attack_count"] += 1
@@ -102,17 +97,12 @@ class BubbleJumboEngine:
         return state["K"]
 
     def attempt_password(self, session_id: str, incoming: str) -> dict:
-        """
-        Process a password attempt from the attacker.
-        Returns the new state.
-        """
         state = self.get_session_state(session_id)
         phase_idx = state["attacker_progress"] % len(MASTER_KEYS)
         expected_key = MASTER_KEYS[phase_idx]
 
         if incoming == expected_key["password"]:
             state["attacker_progress"] += 1
-            # If all 7 phases completed, still escalate and reset progress
             if state["attacker_progress"] % len(MASTER_KEYS) == 0:
                 state["attacker_progress"] = 0
                 self.detect_attack(session_id)
@@ -131,7 +121,6 @@ class BubbleJumboEngine:
                 "attack_count": state["attack_count"]
             }
         else:
-            # Wrong password -> escalate and reset progress
             self.detect_attack(session_id)
             state["attacker_progress"] = 0
             return {
@@ -145,7 +134,7 @@ class BubbleJumboEngine:
 bj_engine = BubbleJumboEngine()
 
 # ═══════════════════════════════════════════════════════
-#  Pydantic Models
+#  API MODELS
 # ═══════════════════════════════════════════════════════
 class AttemptRequest(BaseModel):
     session_id: str
@@ -156,7 +145,7 @@ class AttackDetectRequest(BaseModel):
     reason: str = ""
 
 # ═══════════════════════════════════════════════════════
-#  API Endpoints
+#  ROUTES
 # ═══════════════════════════════════════════════════════
 @app.post("/api/attempt")
 async def attempt_password(request: AttemptRequest):
@@ -185,5 +174,4 @@ async def get_status(session_id: str):
     state = bj_engine.get_session_state(session_id)
     return JSONResponse(content=state)
 
-# Serve static files
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
