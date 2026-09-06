@@ -2,11 +2,12 @@ import os
 import time
 import math
 import hashlib
+import re
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 app = FastAPI()
 
@@ -53,11 +54,78 @@ def gsp_shard_value(password: str, k: int) -> str:
     return password[i1] + password[i2] + password[i3]
 
 # ═══════════════════════════════════════════════════════
+#  ATTACK DETECTION MODULES
+# ═══════════════════════════════════════════════════════
+class AttackDetector:
+    def __init__(self):
+        self.suspicious_domains = set()
+        self.suspicious_patterns = [
+            r'login', r'verify', r'account', r'secure',
+            r'update', r'confirm', r'wallet', r'password',
+            r'phish', r'bank', r'alert'
+        ]
+        self.trusted_domains = set()
+        self.anomaly_baseline: Dict[str, list] = {}
+        self.anomaly_threshold = 3.0
+
+    def add_trusted_domain(self, domain: str):
+        self.trusted_domains.add(domain)
+
+    def detect_phishing(self, url: str) -> bool:
+        if not url:
+            return False
+        domain = url.split('//')[1].split('/')[0] if '//' in url else url
+        if domain in self.trusted_domains:
+            return False
+        for pattern in self.suspicious_patterns:
+            if re.search(pattern, domain, re.IGNORECASE):
+                return True
+        return False
+
+    def detect_bruteforce(self, attempts: int, threshold: int = 5) -> bool:
+        return attempts > threshold
+
+    def detect_ransomware(self, file_ops_rate: float, threshold: float = 10.0) -> bool:
+        return file_ops_rate > threshold
+
+    def detect_malware(self, process_name: str) -> bool:
+        suspicious = ['keylogger', 'trojan', 'miner', 'ransomware', 'spyware']
+        return any(s in process_name.lower() for s in suspicious)
+
+    def detect_network_anomaly(self, host: str, port: int) -> bool:
+        # For demo: flag anything not on standard ports and not local
+        return port not in (80, 443) and not host.startswith('192.168.')
+
+    def detect_sql_injection(self, query: str) -> bool:
+        patterns = [r'\bunion\b', r'\bselect\b', r'\bdrop\b', r'\bexec\b', r'\bscript\b']
+        return any(re.search(p, query, re.IGNORECASE) for p in patterns)
+
+    def detect_xss(self, content: str) -> bool:
+        patterns = [r'<script', r'javascript:', r'onerror', r'onload']
+        return any(re.search(p, content, re.IGNORECASE) for p in patterns)
+
+    def detect_zero_day(self, metric: str, value: float) -> bool:
+        # Unsupervised anomaly detection (simple Z-score)
+        if metric not in self.anomaly_baseline:
+            self.anomaly_baseline[metric] = []
+        data = self.anomaly_baseline[metric]
+        data.append(value)
+        if len(data) < 10:
+            return False
+        mean = sum(data) / len(data)
+        std = (sum((x - mean) ** 2 for x in data) / len(data)) ** 0.5
+        if std < 1e-6:
+            return False
+        z = abs(value - mean) / std
+        return z > self.anomaly_threshold
+
+# ═══════════════════════════════════════════════════════
 #  BUBBLEJUMBO ENGINE (per‑session state)
 # ═══════════════════════════════════════════════════════
 class BubbleJumboEngine:
     def __init__(self):
         self.sessions: Dict[str, dict] = {}
+        self.detector = AttackDetector()
 
     def get_session_state(self, session_id: str) -> dict:
         if session_id not in self.sessions:
@@ -66,7 +134,8 @@ class BubbleJumboEngine:
                 "attack_count": 0,
                 "attacker_progress": 0,
                 "locked": False,
-                "last_attack_time": None
+                "last_attack_time": None,
+                "attack_reasons": []
             }
         return self.sessions[session_id]
 
@@ -88,12 +157,14 @@ class BubbleJumboEngine:
                 })
         return challenges
 
-    def detect_attack(self, session_id: str) -> int:
+    def detect_attack(self, session_id: str, reason: str = "") -> int:
         state = self.get_session_state(session_id)
         state["K"] += K_STEP
         state["attack_count"] += 1
         state["locked"] = True
         state["last_attack_time"] = time.time()
+        if reason:
+            state["attack_reasons"].append(reason)
         return state["K"]
 
     def attempt_password(self, session_id: str, incoming: str) -> dict:
@@ -105,7 +176,7 @@ class BubbleJumboEngine:
             state["attacker_progress"] += 1
             if state["attacker_progress"] % len(MASTER_KEYS) == 0:
                 state["attacker_progress"] = 0
-                self.detect_attack(session_id)
+                self.detect_attack(session_id, "All 7 phases correct, but access NOT granted.")
                 return {
                     "success": False,
                     "message": "All 7 phases correct, but access NOT granted. Escalating.",
@@ -121,7 +192,7 @@ class BubbleJumboEngine:
                 "attack_count": state["attack_count"]
             }
         else:
-            self.detect_attack(session_id)
+            self.detect_attack(session_id, f"Wrong password for Phase {expected_key['label']}")
             state["attacker_progress"] = 0
             return {
                 "success": False,
@@ -130,6 +201,19 @@ class BubbleJumboEngine:
                 "progress": state["attacker_progress"],
                 "attack_count": state["attack_count"]
             }
+
+    # Attack simulation endpoints call these
+    def simulate_attack(self, session_id: str, attack_type: str) -> dict:
+        state = self.get_session_state(session_id)
+        reason = f"Simulated {attack_type} attack"
+        new_k = self.detect_attack(session_id, reason)
+        return {
+            "success": False,
+            "message": f"Attack detected: {reason}",
+            "attack_type": attack_type,
+            "K": new_k,
+            "attack_count": state["attack_count"]
+        }
 
 bj_engine = BubbleJumboEngine()
 
@@ -143,6 +227,7 @@ class AttemptRequest(BaseModel):
 class AttackDetectRequest(BaseModel):
     session_id: str
     reason: str = ""
+    attack_type: Optional[str] = None
 
 # ═══════════════════════════════════════════════════════
 #  ROUTES
@@ -154,19 +239,17 @@ async def attempt_password(request: AttemptRequest):
 
 @app.post("/api/detect")
 async def detect_attack(request: AttackDetectRequest):
-    new_k = bj_engine.detect_attack(request.session_id)
-    return JSONResponse(content={
-        "success": False,
-        "message": f"Attack detected: {request.reason}",
-        "K": new_k
-    })
+    attack_type = request.attack_type or request.reason or "generic"
+    result = bj_engine.simulate_attack(request.session_id, attack_type)
+    return JSONResponse(content=result)
 
 @app.get("/api/challenges")
 async def get_challenges(session_id: str):
     challenges = bj_engine.get_challenges(session_id)
+    state = bj_engine.get_session_state(session_id)
     return JSONResponse(content={
         "challenges": challenges,
-        "K": bj_engine.get_session_state(session_id)["K"]
+        "K": state["K"]
     })
 
 @app.get("/api/status")
@@ -174,4 +257,5 @@ async def get_status(session_id: str):
     state = bj_engine.get_session_state(session_id)
     return JSONResponse(content=state)
 
+# Serve static files (must be last)
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
