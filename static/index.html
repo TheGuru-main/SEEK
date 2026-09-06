@@ -76,7 +76,6 @@
         let attackCount = 0;
         let phaseProgress = 0;
 
-        // Fetch and render grid
         async function refreshGrid() {
             try {
                 const res = await fetch(`/api/challenges?session_id=${sessionId}`);
@@ -92,11 +91,10 @@
         function renderGrid(challenges) {
             const container = document.getElementById('gridContainer');
             container.innerHTML = '';
-            // Build a 7x7 map
             const grid = Array(7).fill(null).map(() => Array(7).fill([]));
             challenges.forEach(ch => {
                 const col = ch.col;
-                const row = ch.row - 1; // 1-indexed to 0-indexed
+                const row = ch.row - 1;
                 if (col >= 0 && col < 7 && row >= 0 && row < 7) {
                     grid[row][col] = [...grid[row][col], ch];
                 }
@@ -108,7 +106,6 @@
                     cell.className = 'cell';
                     const shards = grid[r][c];
                     if (shards.length > 0) {
-                        // Add label and shard values
                         const labels = [...new Set(shards.map(s => s.label))];
                         cell.classList.add(`phase-${labels[0]}`);
                         if (labels.length > 1) cell.classList.add('overlap');
@@ -124,7 +121,6 @@
             }
         }
 
-        // Update status
         async function refreshStatus() {
             const res = await fetch(`/api/status?session_id=${sessionId}`);
             const data = await res.json();
@@ -133,7 +129,6 @@
             document.getElementById('currentK').textContent = data.K;
         }
 
-        // Submit password
         document.getElementById('submitPassword').addEventListener('click', async () => {
             const password = document.getElementById('password').value;
             const res = await fetch('/api/attempt', {
@@ -148,7 +143,6 @@
             refreshStatus();
         });
 
-        // Simulate attack
         document.getElementById('simulateAttack').addEventListener('click', async () => {
             const res = await fetch('/api/detect', {
                 method: 'POST',
@@ -161,12 +155,10 @@
             refreshStatus();
         });
 
-        // New session
         document.getElementById('newSessionBtn').addEventListener('click', () => {
             location.reload();
         });
 
-        // Initial load
         refreshGrid();
         refreshStatus();
     </script>
