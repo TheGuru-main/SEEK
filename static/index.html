@@ -10,51 +10,51 @@
 <div class="container">
     <header>
         <h1>🛡️ BubbleJumbo — Perception Console</h1>
-        <p class="subtitle">Score‑based awareness • User notifications • Attacker trap</p>
+        <p class="subtitle">Non‑sticky traps • Auto‑decay • User‑safe by design</p>
     </header>
 
     <section class="status-panel">
         <div class="status-item"><span class="label">Session</span><span id="sessionId" class="mono"></span></div>
-        <div class="status-item"><span class="label">Role</span><span id="role" class="mono">unknown</span></div>
-        <div class="status-item"><span class="label">Threat Score</span><span id="score" class="mono">0.00</span></div>
+        <div class="status-item"><span class="label">Status</span><span id="status" class="mono">unknown</span></div>
+        <div class="status-item"><span class="label">Kind</span><span id="kind" class="mono">primary</span></div>
+        <div class="status-item"><span class="label">Score</span><span id="score" class="mono">0.00</span></div>
         <div class="status-item"><span class="label">K</span><span id="currentK" class="mono">17</span></div>
-        <div class="status-item"><span class="label">Attacks</span><span id="attackCount" class="mono">0</span></div>
     </section>
 
-    <!-- USER LANE -->
     <section class="lane user-lane">
-        <h2>👤 User View — Notifications Only</h2>
-        <p class="hint">This is what a legitimate user sees. No grid. No challenge. Only alerts.</p>
-        <button id="registerUser" class="btn-primary">Register This Session as Trusted User</button>
+        <h2>👤 User Lane — Notifications Only, Never Trapped</h2>
+        <p class="hint">Register as a primary user. Any suspicious activity only notifies you. You will never see a grid here.</p>
+        <button id="registerUser" class="btn-primary">Register as Primary User</button>
+        <button id="resetSession" class="btn-secondary">Reset This Session</button>
         <div id="notifications" class="notifications">
             <div class="empty">No notifications yet.</div>
         </div>
     </section>
 
-    <!-- ATTACK SIMULATOR -->
     <section class="lane attack-lane">
-        <h2>⚔️ Signal Simulator — Feed Perception Engine</h2>
-        <p class="hint">Send signals. The engine scores them. No attack type is chosen — the score decides.</p>
-
+        <h2>⚔️ Signal Simulator — For a Suspicious Session</h2>
+        <p class="hint">This simulates an <em>attacker's</em> session. Toggle "phishing screen" to see how the trap appears only on flagged screens.</p>
+        <label class="toggle">
+            <input type="checkbox" id="phishingToggle"> Mark this signal as coming from a phishing screen
+        </label>
         <div class="signal-grid">
             <button class="sig-btn" data-sig="normal">Normal request</button>
             <button class="sig-btn" data-sig="flood">Rapid requests</button>
-            <button class="sig-btn" data-sig="sql">Payload with SQL tokens</button>
-            <button class="sig-btn" data-sig="xss">Payload with script tags</button>
+            <button class="sig-btn" data-sig="sql">SQL payload</button>
+            <button class="sig-btn" data-sig="xss">XSS payload</button>
             <button class="sig-btn" data-sig="unknown_ua">Missing user‑agent</button>
             <button class="sig-btn" data-sig="new_ip">IP change</button>
             <button class="sig-btn" data-sig="obfuscated">High‑entropy payload</button>
             <button class="sig-btn" data-sig="probe">Path probing</button>
-            <button class="sig-btn" data-sig="novel">Entirely novel pattern</button>
+            <button class="sig-btn" data-sig="novel">Novel pattern</button>
         </div>
     </section>
 
-    <!-- ATTACKER TRAP VIEW -->
     <section class="lane trap-lane">
-        <h2>🚨 Attacker Trap — Only If Flagged</h2>
-        <p class="hint">This renders only when the backend identifies this session as an attacker.</p>
+        <h2>🚨 Attacker Trap — Only on Flagged Sessions / Phishing Screens</h2>
+        <p class="hint">If this session's status is <code>trap</code>, the grid loads below. Primary user sessions never see this.</p>
         <div id="trapContainer">
-            <div class="empty">This session is not flagged as an attacker. Grid will appear here when it is.</div>
+            <div class="empty">Not trapped. If a phishing screen triggers a trap, the grid will appear here.</div>
         </div>
     </section>
 
@@ -66,31 +66,42 @@
 
 <script>
 const BACKEND = "https://bubblejumbosecurityv1.onrender.com";
-const sessionId = 'sess-' + Math.random().toString(36).substring(2, 15);
-document.getElementById('sessionId').textContent = sessionId;
 
-function setResponse(o){ document.getElementById('responseBox').textContent = typeof o==='string'?o:JSON.stringify(o,null,2); }
+// TWO sessions — primary user session + suspicious session, so they never contaminate
+const userSession     = 'user-'     + Math.random().toString(36).substring(2, 12);
+const attackSession   = 'attacker-' + Math.random().toString(36).substring(2, 12);
+document.getElementById('sessionId').textContent = userSession;
 
-async function api(path, opts={}){
-    const r = await fetch(BACKEND+path, opts);
-    const t = await r.text();
-    try { return {ok:r.ok, data:JSON.parse(t)}; }
-    catch { return {ok:r.ok, data:t}; }
+function setResponse(o){
+    document.getElementById('responseBox').textContent =
+        typeof o === 'string' ? o : JSON.stringify(o, null, 2);
 }
 
-async function refreshStatus(){
-    const {data} = await api(`/api/status?session_id=${sessionId}`);
+async function api(path, opts={}){
+    try {
+        const r = await fetch(BACKEND + path, opts);
+        const t = await r.text();
+        try { return { ok: r.ok, data: JSON.parse(t) }; }
+        catch { return { ok: r.ok, data: t }; }
+    } catch (e) {
+        return { ok: false, data: { error: e.message } };
+    }
+}
+
+// ─── USER LANE ───────────────────────────────────────
+async function refreshUserStatus(){
+    const { data } = await api(`/api/status?session_id=${userSession}`);
     if (!data || typeof data !== 'object') return;
-    document.getElementById('role').textContent = data.role;
-    document.getElementById('score').textContent = (data.threat_score||0).toFixed(3);
+    document.getElementById('status').textContent = data.status;
+    document.getElementById('kind').textContent   = data.kind;
+    document.getElementById('score').textContent  = (data.threat_score || 0).toFixed(3);
     document.getElementById('currentK').textContent = data.K;
-    document.getElementById('attackCount').textContent = data.attack_count;
 }
 
 async function refreshNotifications(){
-    const {data} = await api(`/api/notifications?session_id=${sessionId}`);
+    const { data } = await api(`/api/notifications?session_id=${userSession}`);
     const box = document.getElementById('notifications');
-    if (!data || !data.notifications || data.notifications.length===0){
+    if (!data || !data.notifications || data.notifications.length === 0){
         box.innerHTML = '<div class="empty">No notifications yet.</div>';
         return;
     }
@@ -98,32 +109,31 @@ async function refreshNotifications(){
         <div class="notif">
             <strong>${n.type}</strong>
             <span>${n.message || ''}</span>
-            <small>${new Date((n.time||0)*1000).toLocaleTimeString()}</small>
+            <small>${new Date((n.time || 0) * 1000).toLocaleTimeString()}</small>
         </div>`).join('');
-}
-
-async function refreshTrap(){
-    const {ok, data} = await api(`/api/trap?session_id=${sessionId}`);
-    const c = document.getElementById('trapContainer');
-    if (ok && typeof data === 'string'){
-        c.innerHTML = data;
-        // inject session id into trap's submit
-        const iframeDoc = c.querySelector('iframe');
-    } else {
-        c.innerHTML = '<div class="empty">This session is not flagged as an attacker. Grid will appear here when it is.</div>';
-    }
 }
 
 document.getElementById('registerUser').addEventListener('click', async () => {
     const r = await api('/api/session/register', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({session_id: sessionId, device_token: 'trusted-device'})
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: userSession })
     });
     setResponse(r.data);
-    refreshStatus();
+    refreshUserStatus();
 });
 
-// Signal simulator
+document.getElementById('resetSession').addEventListener('click', async () => {
+    const r = await api('/api/session/reset', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: attackSession })
+    });
+    setResponse(r.data);
+    document.getElementById('trapContainer').innerHTML =
+        '<div class="empty">Not trapped. If a phishing screen triggers a trap, the grid will appear here.</div>';
+    refreshUserStatus();
+});
+
+// ─── ATTACK SIMULATOR ────────────────────────────────
 const signals = {
     normal:     { payload:{path:'/home', verb:'GET', body:'', ip:'192.168.1.10'}, headers:{'user-agent':'Mozilla/5.0 ShopNearMe'} },
     flood:      { payload:{path:'/login', verb:'POST', body:'user=admin&pass=123', ip:'203.0.113.5'}, headers:{'user-agent':'Mozilla/5.0'} },
@@ -140,19 +150,31 @@ document.querySelectorAll('.sig-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
         const key = btn.dataset.sig;
         const sig = signals[key];
+        const isPhishing = document.getElementById('phishingToggle').checked;
+
         const r = await api('/api/ingest', {
-            method:'POST', headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({session_id: sessionId, payload: sig.payload, headers: sig.headers})
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                session_id: attackSession,
+                payload: sig.payload,
+                headers: sig.headers,
+                is_phishing_screen: isPhishing
+            })
         });
         setResponse(r.data);
-        refreshStatus();
-        refreshNotifications();
-        refreshTrap();
+
+        // After ingest, check if the attack session is trapped
+        const st = await api(`/api/status?session_id=${attackSession}`);
+        if (st.data && st.data.status === 'trap') {
+            const trapFrame = document.getElementById('trapContainer');
+            trapFrame.innerHTML = `<iframe src="${BACKEND}/api/trap?session_id=${attackSession}"></iframe>`;
+        }
     });
 });
 
-setInterval(() => { refreshStatus(); refreshNotifications(); }, 4000);
-refreshStatus(); refreshNotifications(); refreshTrap();
+setInterval(() => { refreshUserStatus(); refreshNotifications(); }, 4000);
+refreshUserStatus();
+refreshNotifications();
 </script>
 </body>
 </html>
