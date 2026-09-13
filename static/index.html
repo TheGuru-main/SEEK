@@ -84,6 +84,11 @@
 
     <script>
         (function() {
+            // ═══════════════════════════════════════════
+            // BACKEND HOST — all API calls go here
+            // ═══════════════════════════════════════════
+            const BACKEND = "https://bubblejumbosecurityv1.onrender.com";
+
             const sessionId = 'sess-' + Math.random().toString(36).substring(2, 15);
             document.getElementById('sessionId').textContent = sessionId;
 
@@ -91,7 +96,7 @@
                 document.getElementById('responseBox').textContent = text;
             }
 
-            // Attach event listeners
+            // ─── Attach event listeners ───
             document.getElementById('newSessionBtn').addEventListener('click', () => {
                 location.reload();
             });
@@ -103,7 +108,7 @@
                     return;
                 }
                 try {
-                    const res = await fetch('/api/attempt', {
+                    const res = await fetch(BACKEND + '/api/attempt', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ session_id: sessionId, password: password })
@@ -120,7 +125,7 @@
 
             document.getElementById('simulateAttack').addEventListener('click', async () => {
                 try {
-                    const res = await fetch('/api/detect', {
+                    const res = await fetch(BACKEND + '/api/detect', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ session_id: sessionId, reason: 'generic simulation', attack_type: 'generic' })
@@ -139,7 +144,7 @@
                 btn.addEventListener('click', async () => {
                     const attackType = btn.dataset.attack;
                     try {
-                        const res = await fetch('/api/detect', {
+                        const res = await fetch(BACKEND + '/api/detect', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ session_id: sessionId, reason: `Simulated ${attackType}`, attack_type: attackType })
@@ -156,7 +161,7 @@
 
             async function refreshGrid() {
                 try {
-                    const res = await fetch(`/api/challenges?session_id=${sessionId}`);
+                    const res = await fetch(BACKEND + `/api/challenges?session_id=${sessionId}`);
                     const data = await res.json();
                     document.getElementById('currentK').textContent = data.K;
                     renderGrid(data.challenges);
@@ -167,7 +172,7 @@
 
             async function refreshStatus() {
                 try {
-                    const res = await fetch(`/api/status?session_id=${sessionId}`);
+                    const res = await fetch(BACKEND + `/api/status?session_id=${sessionId}`);
                     const data = await res.json();
                     document.getElementById('attackCount').textContent = data.attack_count;
                     document.getElementById('phaseProgress').textContent = `${data.attacker_progress}/7`;
