@@ -6,10 +6,22 @@ import re
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Optional
 
 app = FastAPI()
+
+# ═══════════════════════════════════════════════════════
+#  CORS — allows your frontend service to call this API
+# ═══════════════════════════════════════════════════════
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ═══════════════════════════════════════════════════════
 #  FULL BUBBLEJUMBO CONFIGURATION
@@ -93,7 +105,6 @@ class AttackDetector:
         return any(s in process_name.lower() for s in suspicious)
 
     def detect_network_anomaly(self, host: str, port: int) -> bool:
-        # For demo: flag anything not on standard ports and not local
         return port not in (80, 443) and not host.startswith('192.168.')
 
     def detect_sql_injection(self, query: str) -> bool:
@@ -105,7 +116,6 @@ class AttackDetector:
         return any(re.search(p, content, re.IGNORECASE) for p in patterns)
 
     def detect_zero_day(self, metric: str, value: float) -> bool:
-        # Unsupervised anomaly detection (simple Z-score)
         if metric not in self.anomaly_baseline:
             self.anomaly_baseline[metric] = []
         data = self.anomaly_baseline[metric]
@@ -202,7 +212,6 @@ class BubbleJumboEngine:
                 "attack_count": state["attack_count"]
             }
 
-    # Attack simulation endpoints call these
     def simulate_attack(self, session_id: str, attack_type: str) -> dict:
         state = self.get_session_state(session_id)
         reason = f"Simulated {attack_type} attack"
