@@ -15,6 +15,9 @@ app = FastAPI()
 # ═══════════════════════════════════════════════════════
 #  CORS — allows your frontend service to call this API
 # ═══════════════════════════════════════════════════════
+
+from fastapi.middleware.cors import CORSMiddleware
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
