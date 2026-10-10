@@ -3,6 +3,7 @@ import time
 import math
 import hashlib
 import re
+from urllib.parse import unquote
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, HTMLResponse
@@ -97,7 +98,8 @@ class ThreatPerception:
             return 1.0
         if signals.get("header_anomaly", 0) >= 1.0:
             return 0.92
-        if signals.get("request_rate", 0) > 8.0:
+        # Rate trap — 24 requests/minute or faster
+        if signals.get("request_rate", 0) > 0.4:
             return 0.9
         if signals.get("payload_entropy", 0) > 6.5:
             return 0.88
@@ -135,9 +137,17 @@ class ThreatPerception:
 #  SIGNAL EXTRACTION
 # ═══════════════════════════════════════════════════════
 SUSPICIOUS_TOKENS = [
-    "union", "select", "drop", "exec", "<script", "javascript:",
-    "onerror", "onload", "../", "..\\", "/etc/passwd", "cmd.exe",
-    "eval(", "base64_decode", "wget ", "curl ", "chmod ",
+    # SQL injection
+    "union", "select", "drop", "insert ", "exec", "or 1=1", "' or '",
+    # XSS
+    "<script", "javascript:", "onerror", "onload",
+    # Path traversal
+    "../", "..\\", "/etc/passwd", "/etc/shadow", "/proc/self",
+    # Command injection
+    "cmd.exe", "eval(", "base64_decode", "wget ", "curl ", "chmod ",
+    # Recon / admin probes
+    "/admin", "/.env", "/wp-admin", "/wp-login", "/phpmyadmin",
+    "/.git", "/config.py", "/config.json", "/wp-config", "/backup",
 ]
 
 BAD_UA_TOKENS = (
@@ -148,6 +158,7 @@ BAD_UA_TOKENS = (
 
 def extract_signals(payload, headers, history):
     path = payload.get("path", "")
+    query = unquote(payload.get("query", "") or "")
     body = payload.get("body", "") or ""
     verb = payload.get("verb", "GET").upper()
     ip = payload.get("ip", "")
@@ -199,7 +210,8 @@ def extract_signals(payload, headers, history):
     history["verbs"] = verbs
     verb_novelty = 0.0 if len(verbs) <= 3 else (len(verbs) - 3) / 5.0
 
-    lower = body.lower() + path.lower()
+    # Inspect body + path + query (decoded) for attack tokens
+    lower = (body + " " + path + " " + query).lower()
     content_suspicion = 1.0 if any(tok in lower for tok in SUSPICIOUS_TOKENS) else 0.0
 
     return {
@@ -490,6 +502,7 @@ async def perception_state():
 
 @app.get("/api/health")
 async def health():
-    return {"ok": True, "service": "bubblejumbo", "sessions": len(registry.sessions), "version": "2.2", "threshold": perception.threshold}
+    return {"ok": True, "service": "bubblejumbo", "sessions": len(registry.sessions),
+            "version": "2.3", "threshold": perception.threshold}
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
