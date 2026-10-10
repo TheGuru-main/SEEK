@@ -528,8 +528,69 @@ pre{background:#12121a;border:1px solid #2a2a3d;border-radius:6px;padding:8px;fo
 <h1>&#128737;&#65039; BubbleJumbo Security Test</h1>
 <p style="font-size:.75rem;color:#888;margin-bottom:8px">Attack phases render the grid below once the session is trapped.</p>
 
+
 <h3>Run</h3>
 <button onclick="runAll()">&#9654; Run Full Test</button>
 <button onclick="runPhase('recon')">Recon</button>
 <button onclick="runPhase('brute')">Brute</button>
-<button onclick="runPhase('inject'
+<button onclick="runPhase('inject')">Inject</button>
+<button onclick="runPhase('flood')">Flood</button>
+<button onclick="runPhase('ua')">Bad UA</button>
+<button onclick="runPhase('phish')">Phishing</button>
+<button onclick="clearAll()">Reset</button>
+
+<div class="stat">
+<span class="pill">pass: <span id="s-pass">0</span></span>
+<span class="pill">trap: <span id="s-trap">0</span></span>
+<span class="pill">blocked: <span id="s-blocked">0</span></span>
+<span class="pill">errors: <span id="s-err">0</span></span>
+</div>
+
+<h3>Attacker Grid (renders when trapped)</h3>
+<div id="gridBox"><p style="color:#555;font-size:.75rem">Not trapped yet. Run an attack phase.</p></div>
+
+<h3>Log</h3>
+<pre id="log">Ready.</pre>
+
+<script>
+var stats={pass:0,trap:0,blocked:0,err:0};
+function target(){return window.location.origin}
+function log(m){var el=document.getElementById('log');el.textContent+="\\n"+m;el.scrollTop=el.scrollHeight}
+function clearLog(){document.getElementById('log').textContent='Ready.';stats={pass:0,trap:0,blocked:0,err:0};renderStats();document.getElementById('gridBox').innerHTML='<p style="color:#555;font-size:.75rem">Not trapped yet.</p>'}
+function clearAll(){clearLog();}
+function renderStats(){document.getElementById('s-pass').textContent=stats.pass;document.getElementById('s-trap').textContent=stats.trap;document.getElementById('s-blocked').textContent=stats.blocked;document.getElementById('s-err').textContent=stats.err}
+function sleep(ms){return new Promise(function(r){setTimeout(r,ms)})}
+function showGrid(html){
+    var box=document.getElementById('gridBox');
+    box.innerHTML='';
+    var ifr=document.createElement('iframe');
+    ifr.srcdoc=html;
+    box.appendChild(ifr);
+}
+async function probe(label,method,path,opts){
+opts=opts||{};var started=Date.now();var res,text;
+try{
+var init={method:method,redirect:'follow',credentials:'include',headers:opts.headers||{}};
+if(opts.json){init.headers['Content-Type']='application/json';init.body=JSON.stringify(opts.json)}
+res=await fetch(target()+path,init);text=await res.text();
+}catch(e){stats.err++;renderStats();log('['+label+'] NETWORK ERROR: '+e.message);return}
+var elapsed=Date.now()-started;
+var trap=text.indexOf('Verification Required')!==-1||text.indexOf('7x7')!==-1;
+var verdict=trap?'TRAP':([401,403,429].indexOf(res.status)!==-1?'BLOCKED':'PASS');
+if(verdict==='TRAP')stats.trap++;else if(verdict==='BLOCKED')stats.blocked++;else stats.pass++;
+renderStats();
+log('['+label+'] status='+res.status+' time='+elapsed+'ms verdict='+verdict);
+if(trap){showGrid(text)}
+}
+async function phaseRecon(){log('\\n---- Recon ----');var p=['/admin','/.env','/config.py','/wp-admin','/api/admin/db-counts'];for(var i=0;i<p.length;i++){await probe(p[i],'GET',p[i]);await sleep(150)}}
+async function phaseBrute(){log('\\n---- Brute login ----');for(var i=0;i<15;i++){await probe('login#'+(i+1),'POST','/api/auth/login',{json:{phone:'2348000000000',password:'guess'+i}});await sleep(150)}}
+async function phaseInject(){log('\\n---- Inject ----');await probe('sqli','GET',"/api/fantasy/clubs/epl:ars' UNION SELECT * FROM users--/players");await probe('trav','GET','/api/openbox/file/../../etc/passwd');await probe('xss','GET','/api/fantasy/tournaments?q=%3Cscript%3Ealert(1)%3C%2Fscript%3E')}
+async function phaseFlood(){log('\\n---- Flood 30 ----');for(var i=0;i<30;i++){try{var r=await fetch(target()+'/api/health');if(r.status===403){log('   trapped at #'+(i+1));return}}catch(e){log('   err #'+(i+1)+': '+e.message);return}}log('   completed 30 with no trap')}
+async function phaseUA(){log('\\n---- Bad UA (browser strips UA — test with curl) ----');var a=['sqlmap/1.7','Nikto','Nmap NSE','curl/8.4',''];for(var i=0;i<a.length;i++){await probe('ua='+(a[i]||'empty'),'GET','/api/health',{headers:{'User-Agent':a[i]}});await sleep(150)}}
+async function phasePhish(){log('\\n---- Phishing ----');await probe('bj_flag','GET','/?bj_phishing=1');await probe('referer','GET','/',{headers:{'Referer':'https://evil.example.com/login'}});await probe('both','GET','/?bj_phishing=1',{headers:{'Referer':'https://phish.example.com/steal'}})}
+async function runPhase(n){clearAll();if(n==='recon')await phaseRecon();if(n==='brute')await phaseBrute();if(n==='inject')await phaseInject();if(n==='flood')await phaseFlood();if(n==='ua')await phaseUA();if(n==='phish')await phasePhish()}
+async function runAll(){clearAll();log('Target: '+target());await probe('baseline-home','GET','/');await probe('baseline-health','GET','/api/health');await phaseRecon();await phaseBrute();await phaseInject();await phaseFlood();await phaseUA();await phasePhish();log('\\n==== DONE ====');log('Summary: pass='+stats.pass+' trap='+stats.trap+' blocked='+stats.blocked+' errors='+stats.err)}
+window.runAll=runAll;window.runPhase=runPhase;window.clearAll=clearAll;
+</script>
+</body>
+</html>
