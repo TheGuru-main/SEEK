@@ -85,7 +85,20 @@ class ThreatPerception:
             old = self.baselines[sid].get(k, v)
             self.baselines[sid][k] = old * (1 - self.learning_rate) + v * self.learning_rate
 
-    def score(self, sid, signals):
+    def score(self, sid, signals, is_phishing_screen=False):
+        # ─── HARD RULES: known attacks trap instantly, no learning involved ───
+        if signals.get("content_suspicion", 0) >= 1.0:
+            return 1.0
+        if is_phishing_screen:
+            return 1.0
+        if signals.get("header_anomaly", 0) >= 1.0:
+            return 0.92
+        if signals.get("request_rate", 0) > 8.0:
+            return 0.9
+        if signals.get("payload_entropy", 0) > 6.5:
+            return 0.88
+
+        # ─── SOFT RULES: baseline deviation ───
         if sid not in self.baselines or not self.baselines[sid]:
             return 0.4
         total, weight_sum = 0.0, 0.0
@@ -117,6 +130,12 @@ SUSPICIOUS_TOKENS = [
     "eval(", "base64_decode", "wget ", "curl ", "chmod ",
 ]
 
+BAD_UA_TOKENS = (
+    "sqlmap", "nikto", "nmap", "masscan", "acunetix",
+    "nessus", "curl/", "wget/", "python-requests",
+    "libwww-perl", "go-http-client",
+)
+
 def extract_signals(payload, headers, history):
     path = payload.get("path", "")
     body = payload.get("body", "") or ""
@@ -141,8 +160,13 @@ def extract_signals(payload, headers, history):
     paths.append(path); history["paths"] = paths[-200:]
     path_repetition = paths.count(path) / max(len(paths), 1)
 
-    ua = headers.get("user-agent", "")
-    header_anomaly = 1.0 if (not ua or len(ua) < 10 or "curl" in ua.lower() or "python" in ua.lower()) else 0.0
+    ua = headers.get("user-agent", "") or headers.get("User-Agent", "")
+    ua_low = (ua or "").lower()
+    header_anomaly = 0.0
+    if not ua or len(ua) < 10:
+        header_anomaly = 1.0
+    elif any(tok in ua_low for tok in BAD_UA_TOKENS):
+        header_anomaly = 1.0
 
     first_seen = history.get("first_seen", now)
     session_age_inverse = 1.0 / (now - first_seen + 1)
@@ -360,9 +384,13 @@ async def ingest(req: IngestRequest):
     history = state["history"]
 
     signals = extract_signals(req.payload, req.headers, history)
-    score = perception.score(req.session_id, signals)
+    score = perception.score(req.session_id, signals, req.is_phishing_screen)
     state["last_threat_score"] = score
-    perception.observe(req.session_id, signals)
+
+    # Never teach the baseline from a suspicious signal.
+    # Otherwise attack signals become "normal" for the session.
+    if score < 0.5 and not req.is_phishing_screen:
+        perception.observe(req.session_id, signals)
 
     # Determine if we should escalate
     is_threat = score >= perception.threshold
@@ -448,5 +476,9 @@ async def attempt(req: AttemptRequest):
 async def perception_state():
     return {"weights": perception.weights, "threshold": perception.threshold,
             "sessions_tracked": len(perception.baselines)}
+
+@app.get("/api/health")
+async def health():
+    return {"ok": True, "service": "bubblejumbo", "sessions": len(registry.sessions), "version": "2.1"}
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
