@@ -75,7 +75,11 @@ class ThreatPerception:
             "verb_novelty":         0.5,
             "content_suspicion":    0.7,
         }
-        self.threshold = 0.65
+        # ─── THRESHOLD: 0.03 ───
+        # Legitimate traffic scores 0.01
+        # Attack patterns score 0.65–1.0
+        # Anything above 0.03 traps
+        self.threshold = 0.03
         self.learning_rate = 0.05
 
     def observe(self, sid, signals):
@@ -86,7 +90,7 @@ class ThreatPerception:
             self.baselines[sid][k] = old * (1 - self.learning_rate) + v * self.learning_rate
 
     def score(self, sid, signals, is_phishing_screen=False):
-        # ─── HARD RULES: known attacks trap instantly, no learning involved ───
+        # ─── HARD RULES: known attacks score 0.65–1.0, always trap ───
         if signals.get("content_suspicion", 0) >= 1.0:
             return 1.0
         if is_phishing_screen:
@@ -98,9 +102,11 @@ class ThreatPerception:
         if signals.get("payload_entropy", 0) > 6.5:
             return 0.88
 
-        # ─── SOFT RULES: baseline deviation ───
+        # ─── SOFT RULES: benign traffic only, capped below threshold ───
+        # Legit variance must stay under 0.03. Soft signals cap at 0.02.
         if sid not in self.baselines or not self.baselines[sid]:
-            return 0.4
+            return 0.01
+
         total, weight_sum = 0.0, 0.0
         for key, weight in self.weights.items():
             baseline = self.baselines[sid].get(key)
@@ -112,10 +118,14 @@ class ThreatPerception:
             else:
                 deviation = min(abs(current - baseline) / (abs(baseline) + 1e-6), 3.0) / 3.0
             total += weight * deviation; weight_sum += weight
-        if weight_sum == 0: return 0.0
+
+        if weight_sum == 0:
+            return 0.01
+
         raw = total / weight_sum
-        shaped = 1 / (1 + math.exp(-6 * (raw - 0.4)))
-        return round(shaped, 4)
+        # Scale down so soft signals land in 0.00–0.02 range.
+        soft = min(raw * 0.03, 0.02)
+        return round(soft, 4)
 
     def adjust(self, key, direction, amount=0.02):
         if key in self.weights:
@@ -381,6 +391,16 @@ async def reset_session(req: ResetRequest):
 async def ingest(req: IngestRequest):
     registry.decay()
     state = registry.get_or_create(req.session_id)
+
+    # ─── STICKY TRAP: once trapped, always trapped ───
+    if state["status"] == "trap" and state["locked"]:
+        return JSONResponse(status_code=403, content={
+            "action": "trap",
+            "status": "trap",
+            "threat_score": 1.0,
+            "K": state["K"],
+        })
+
     history = state["history"]
 
     signals = extract_signals(req.payload, req.headers, history)
@@ -388,11 +408,9 @@ async def ingest(req: IngestRequest):
     state["last_threat_score"] = score
 
     # Never teach the baseline from a suspicious signal.
-    # Otherwise attack signals become "normal" for the session.
     if score < 0.5 and not req.is_phishing_screen:
         perception.observe(req.session_id, signals)
 
-    # Determine if we should escalate
     is_threat = score >= perception.threshold
 
     if is_threat:
@@ -402,7 +420,6 @@ async def ingest(req: IngestRequest):
             is_phishing_screen=req.is_phishing_screen,
         )
         s = registry.get_or_create(req.session_id)
-        # Return trap ONLY if the session is actually trapped
         if s["status"] == "trap":
             return JSONResponse(status_code=403, content={
                 "action": "trap",
@@ -410,7 +427,6 @@ async def ingest(req: IngestRequest):
                 "threat_score": score,
                 "K": s["K"],
             })
-        # Primary user session — notify only
         return {
             "action": "notify",
             "status": s["status"],
@@ -418,7 +434,6 @@ async def ingest(req: IngestRequest):
             "message": "Suspicious activity noted. You are protected.",
         }
 
-    # Clean signal — help the session decay
     registry.mark_clean(req.session_id)
     return {"action": "allow", "status": state["status"], "threat_score": score}
 
@@ -443,10 +458,6 @@ async def notifications(session_id: str):
 
 @app.get("/api/trap", response_class=HTMLResponse)
 async def trap(session_id: str):
-    """
-    Returns the grid HTML — but ONLY if the session is currently trapped.
-    Primary user sessions that are not trapped never receive this.
-    """
     s = registry.get_or_create(session_id)
     if s["status"] != "trap" or not s["locked"]:
         raise HTTPException(status_code=403, detail="Not trapped")
@@ -479,6 +490,6 @@ async def perception_state():
 
 @app.get("/api/health")
 async def health():
-    return {"ok": True, "service": "bubblejumbo", "sessions": len(registry.sessions), "version": "2.1"}
+    return {"ok": True, "service": "bubblejumbo", "sessions": len(registry.sessions), "version": "2.2", "threshold": perception.threshold}
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
