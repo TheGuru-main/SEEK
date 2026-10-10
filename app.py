@@ -105,7 +105,6 @@ class ThreatPerception:
             return 0.88
 
         # ─── SOFT RULES: benign traffic only, capped below threshold ───
-        # Legit variance must stay under 0.03. Soft signals cap at 0.02.
         if sid not in self.baselines or not self.baselines[sid]:
             return 0.01
 
@@ -125,7 +124,6 @@ class ThreatPerception:
             return 0.01
 
         raw = total / weight_sum
-        # Scale down so soft signals land in 0.00–0.02 range.
         soft = min(raw * 0.03, 0.02)
         return round(soft, 4)
 
@@ -230,7 +228,7 @@ def extract_signals(payload, headers, history):
 # ═══════════════════════════════════════════════════════
 #  SESSION REGISTRY — non-sticky, auto-decaying, split lanes
 # ═══════════════════════════════════════════════════════
-TRAP_DECAY_SECONDS = 300   # 5 minutes of clean → back to user
+TRAP_DECAY_SECONDS = 300
 WATCH_DECAY_SECONDS = 120
 
 class SessionRegistry:
@@ -241,8 +239,8 @@ class SessionRegistry:
         if session_id not in self.sessions:
             self.sessions[session_id] = {
                 "session_id": session_id,
-                "kind": kind,              # "primary" | "suspicious"
-                "status": "unknown",       # "user" | "watch" | "trap" | "unknown"
+                "kind": kind,
+                "status": "unknown",
                 "K": K_INIT,
                 "attack_count": 0,
                 "attacker_progress": 0,
@@ -270,7 +268,6 @@ class SessionRegistry:
 
     def raise_to_trap(self, session_id: str, reason: str, is_phishing_screen: bool = False):
         s = self.get_or_create(session_id)
-        # PRIMARY user sessions can never be trapped — they only get notified
         if s["kind"] == "primary" and s["status"] == "user" and not is_phishing_screen:
             s["status"] = "watch"
             self.notify(session_id, {
@@ -280,7 +277,6 @@ class SessionRegistry:
                 "reason": reason,
             })
             return s
-        # Suspicious session OR phishing screen → trap
         s["status"] = "trap"
         s["K"] += K_STEP
         s["attack_count"] += 1
@@ -300,7 +296,6 @@ class SessionRegistry:
         s["notifications"] = s["notifications"][-50:]
 
     def decay(self):
-        """Auto-decay trap/watch status back to user after clean period."""
         now = time.time()
         for s in self.sessions.values():
             if s["status"] == "trap":
@@ -331,7 +326,7 @@ registry = SessionRegistry()
 perception = ThreatPerception()
 
 # ═══════════════════════════════════════════════════════
-#  TRAP HTML — returned only for suspicious sessions / phishing screens
+#  TRAP HTML
 # ═══════════════════════════════════════════════════════
 def render_trap_html(session_id: str) -> str:
     return f"""<!DOCTYPE html>
@@ -419,7 +414,6 @@ async def ingest(req: IngestRequest):
     score = perception.score(req.session_id, signals, req.is_phishing_screen)
     state["last_threat_score"] = score
 
-    # Never teach the baseline from a suspicious signal.
     if score < 0.5 and not req.is_phishing_screen:
         perception.observe(req.session_id, signals)
 
@@ -503,6 +497,39 @@ async def perception_state():
 @app.get("/api/health")
 async def health():
     return {"ok": True, "service": "bubblejumbo", "sessions": len(registry.sessions),
-            "version": "2.3", "threshold": perception.threshold}
+            "version": "2.4", "threshold": perception.threshold}
 
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
+# ═══════════════════════════════════════════════════════
+#  VISUAL SECURITY TEST — grid renders in iframe on trap
+# ═══════════════════════════════════════════════════════
+@app.get("/bj-test", response_class=HTMLResponse)
+def bj_test_page():
+    return HTMLResponse(content="""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>BubbleJumbo Security Test</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:monospace;background:#0a0a0f;color:#e8e8f0;padding:12px;font-size:13px}
+h1{font-size:1rem;color:#00d2ff;margin-bottom:8px}
+h3{font-size:.75rem;color:#b8aaff;margin:12px 0 6px;text-transform:uppercase;letter-spacing:.06em}
+button{padding:9px 14px;border-radius:6px;border:none;background:#6c5ce7;color:#fff;font-weight:700;font-size:12px;cursor:pointer;margin:2px;font-family:inherit}
+button:hover{background:#8b7cf7}
+pre{background:#12121a;border:1px solid #2a2a3d;border-radius:6px;padding:8px;font-size:11px;max-height:280px;overflow:auto;white-space:pre-wrap;color:#00ff88}
+#gridBox{margin:8px 0;min-height:80px}
+#gridBox iframe{width:100%;height:440px;border:1px solid #2a2a3d;border-radius:8px;background:#0a0a0f}
+.stat{display:flex;gap:10px;flex-wrap:wrap;margin:6px 0;font-size:.7rem}
+.pill{padding:3px 9px;border-radius:10px;background:#1a1a26}
+</style>
+</head>
+<body>
+<h1>&#128737;&#65039; BubbleJumbo Security Test</h1>
+<p style="font-size:.75rem;color:#888;margin-bottom:8px">Attack phases render the grid below once the session is trapped.</p>
+
+<h3>Run</h3>
+<button onclick="runAll()">&#9654; Run Full Test</button>
+<button onclick="runPhase('recon')">Recon</button>
+<button onclick="runPhase('brute')">Brute</button>
+<button onclick="runPhase('inject'
