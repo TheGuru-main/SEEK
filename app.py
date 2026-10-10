@@ -593,4 +593,6 @@ async function runAll(){clearAll();log('Target: '+target());await probe('baselin
 window.runAll=runAll;window.runPhase=runPhase;window.clearAll=clearAll;
 </script>
 </body>
-</html>
+</html>""")
+
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
